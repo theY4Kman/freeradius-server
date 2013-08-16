@@ -493,7 +493,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 		return;
 	}
 	current->timestamp = header->ts;
-	current->data_len = header->caplen - (data - p);
+	current->data_len = header->caplen - (p - data);
 	memcpy(&current->data, &p, sizeof(current->data));
 
 	/*
