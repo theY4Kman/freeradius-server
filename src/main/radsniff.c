@@ -664,6 +664,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 				return;
 			}
 			search.packet->code = current->code;
+
 			rs_tv_add_ms(&header->ts, conf->stats.timeout, &when);
 
 			original = rbtree_finddata(request_tree, &search);
@@ -1342,6 +1343,8 @@ int main(int argc, char *argv[])
 	{
 #ifdef HAVE_SIGACTION
 		struct sigaction action;
+		memset(&action, 0, sizeof(action));
+
 		action.sa_handler = rs_cleanup;
 		sigaction(SIGINT, &action, NULL);
 		sigaction(SIGQUIT, &action, NULL);
