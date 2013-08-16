@@ -405,7 +405,7 @@ static int _request_free(rs_request_t *request)
 	return 0;
 }
 
-static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr const *header, uint8_t const *data)
+static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkthdr const *header, uint8_t const *data)
 {
 	rs_stats_t		*stats = event->stats;
 	struct timeval		elapsed;
@@ -423,6 +423,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 	bool			response;	/* Was it a response code */
 
 	decode_fail_t		reason;		/* Why we failed decoding the packet */
+	static uint64_t		captured = 0;
 
 	RADIUS_PACKET *current;			/* Current packet were processing */
 	rs_request_t *original;
@@ -519,9 +520,9 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 	current->dst_port = ntohs(udp->udp_dport);
 
 	if (!rad_packet_ok(current, 0, &reason)) {
-		RIDEBUG("(%i) ** %s **", count, fr_strerror());
+		RIDEBUG("(%" PRIu64 ") ** %s **", count, fr_strerror());
 
-		RIDEBUG("(%i) %s Id %i %s:%s:%d -> %s:%d\t+%u.%03u", count,
+		RIDEBUG("(%" PRIu64 ") %s Id %i %s:%s:%d -> %s:%d\t+%u.%03u", count,
 			fr_packet_codes[current->code], current->id,
 			event->in->name,
 			fr_inet_ntop(current->src_ipaddr.af, &current->src_ipaddr.ipaddr), current->src_port,
@@ -574,7 +575,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 				if (!original->linked) {
 					original->stats_rsp = &stats->exchange[current->code];
 				} else {
-					RDEBUG("(%i) ** RETRANSMISSION **", count);
+					RDEBUG("(%" PRIu64 ") ** RETRANSMISSION **", count);
 					original->rt_rsp++;
 
 					rad_free(&original->linked);
@@ -618,11 +619,11 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 				 */
 				if (filter_vps) {
 					rad_free(&current);
-					RDEBUG2("(%i) Dropped by attribute filter", count);
+					RDEBUG2("(%" PRIu64 ") Dropped by attribute filter", count);
 					return;
 				}
 
-				RDEBUG("(%i) ** UNLINKED **", count);
+				RDEBUG("(%" PRIu64 ") ** UNLINKED **", count);
 				stats->exchange[current->code].interval.unlinked_total++;
 			}
 
@@ -655,7 +656,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 			 */
 			if (filter_vps && !pairvalidate_relaxed(filter_vps, current->vps)) {
 				rad_free(&current);
-				RDEBUG2("(%i) Dropped by attribute filter", count);
+				RDEBUG2("(%" PRIu64 ") Dropped by attribute filter", count);
 				return;
 			}
 
@@ -681,7 +682,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 			 */
 			if (original && memcmp(original->packet->vector, current->vector,
 					       sizeof(original->packet->vector) != 0)) {
-				RDEBUG2("(%i) ** PREMATURE ID RE-USE **", count);
+				RDEBUG2("(%" PRIu64 ") ** PREMATURE ID RE-USE **", count);
 				stats->exchange[current->code].interval.reused_total++;
 				original->forced_cleanup = true;
 
@@ -691,7 +692,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 			}
 
 			if (original) {
-				RDEBUG("(%i) ** RETRANSMISSION **", count);
+				RDEBUG("(%" PRIu64 ") ** RETRANSMISSION **", count);
 				original->rt_req++;
 
 				rad_free(&original->packet);
@@ -764,7 +765,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 		/*
 		 *	Print info about the request/response.
 		 */
-		RIDEBUG("(%i) %s Id %i %s:%s:%d %s %s:%d\t+%u.%03u\t+%u.%03u", count,
+		RIDEBUG("(%" PRIu64 ") %s Id %i %s:%s:%d %s %s:%d\t+%u.%03u\t+%u.%03u", count,
 			fr_packet_codes[current->code], current->id,
 			event->in->name,
 			fr_inet_ntop(current->src_ipaddr.af, &current->src_ipaddr.ipaddr), current->src_port,
@@ -779,7 +780,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 		/*
 		 *	Print info about the request
 		 */
-		RIDEBUG("(%i) %s Id %i %s:%s:%d %s %s:%d\t+%u.%03u", count,
+		RIDEBUG("(%" PRIu64 ") %s Id %i %s:%s:%d %s %s:%d\t+%u.%03u", count,
 			fr_packet_codes[current->code], current->id,
 			event->in->name,
 			fr_inet_ntop(current->src_ipaddr.af, &current->src_ipaddr.ipaddr), current->src_port,
@@ -810,11 +811,20 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 	if (!response || !original) {
 		rad_free(&current);
 	}
+
+	captured++;
+	/*
+	 *	We've hit our capture limit, break out of the event loop
+	 */
+	if ((conf->limit > 0) && (captured >= conf->limit)) {
+		INFO("Captured %" PRIu64 " packets, exiting...", captured);
+		fr_event_loop_exit(events, 1);
+	}
 }
 
 static void rs_got_packet(UNUSED fr_event_list_t *el, int fd, void *ctx)
 {
-	static int	count = 0;	/* Packets seen */
+	static uint64_t	count = 0;	/* Packets seen */
 	rs_event_t	*event = ctx;
 	pcap_t		*handle = event->in->handle;
 
@@ -841,15 +851,6 @@ static void rs_got_packet(UNUSED fr_event_list_t *el, int fd, void *ctx)
 
 		count++;
 		rs_packet_process(count, event, header, data);
-
-		/*
-		 *	We've hit our capture limit, break out of the event loop
-		 */
-		if ((conf->limit > 0) && (count >= conf->limit)) {
-			INFO("Captured %i packets, exiting...", count);
-			fr_event_loop_exit(events, 1);
-			return;
-		}
 	}
 }
 
@@ -1260,7 +1261,7 @@ int main(int argc, char *argv[])
 			DEBUG2("  Writing to               : [%s]", out->name);
 		}
 		if (conf->limit > 0)	{
-			DEBUG2("  Capture limit (packets)  : [%d]", conf->limit);
+			DEBUG2("  Capture limit (packets)  : [%" PRIu64 "]", conf->limit);
 		}
 			DEBUG2("  PCAP filter              : [%s]", conf->pcap_filter);
 			DEBUG2("  RADIUS secret            : [%s]", conf->radius_secret);
