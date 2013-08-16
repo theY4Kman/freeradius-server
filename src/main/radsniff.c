@@ -334,6 +334,7 @@ static void rs_packet_cleanup(void *ctx)
 
 	assert(request->stats_req);
 	assert(!request->rt_rsp || request->stats_rsp);
+	assert(packet);
 
 	/*
 	 *	Don't pollute stats or print spurious messages as radsniff closes.
@@ -580,7 +581,7 @@ static void rs_packet_process(int count, rs_event_t *event, struct pcap_pkthdr c
 					fr_event_delete(event->list, &original->event);
 				}
 
-				original->linked = talloc_steal(original, search.packet);
+				original->linked = talloc_steal(original, current);
 
 				/*
 				 *	Some RADIUS servers and proxy servers may not cache
